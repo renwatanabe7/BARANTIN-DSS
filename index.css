@@ -1,0 +1,920 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useState, useEffect } from 'react';
+import { Upload, AlertTriangle, CheckCircle, Info, ShieldAlert, ShieldCheck, Bug, ChevronRight, ExternalLink, BookOpen, RefreshCw, Globe, BarChart3, LayoutDashboard, Menu, X, History, ChevronDown } from 'lucide-react';
+import { translations } from './translations';
+import { Capacitor } from '@capacitor/core';
+import StatisticsDashboard from './components/StatisticsDashboard';
+import HistoryPage from './components/HistoryPage';
+
+// Helper to determine API URL
+const getApiUrl = () => {
+  // If running in native app (Android/iOS), use the production backend URL
+  if (Capacitor.isNativePlatform()) {
+    return 'https://ais-pre-oa4vo6s4cqlc6deoezomlg-359100989091.asia-east1.run.app';
+  }
+  // Otherwise use relative path (proxy handles it in dev/web)
+  return '';
+};
+
+interface Taxonomy {
+  kingdom: string;
+  phylum: string;
+  class: string;
+  subclass: string;
+  order_name: string;
+  family: string;
+  genus: string;
+  species: string;
+}
+
+interface Reference {
+  title: string;
+  url: string;
+}
+
+interface IntegratedSource {
+  name: string;
+  url: string;
+}
+
+interface RiskDetails {
+  potential_damage: string;
+  spread_rate: string;
+  economic_impact: string;
+  reasoning: string;
+}
+
+interface TreatmentStep {
+  step_number: number;
+  title: string;
+  description: string;
+  technical_details?: string;
+  video_url?: string;
+}
+
+interface TreatmentGuide {
+  media_type: string;
+  treatment_method: string;
+  steps: TreatmentStep[];
+}
+
+interface DecisionReport {
+  scientific_name: string;
+  taxonomy: Taxonomy;
+  taxonomy_explanation: string;
+  quarantine_status: string;
+  regulatory_status: string;
+  regulation_description: string;
+  risk_level: string;
+  risk_details: RiskDetails;
+  mitigation: {
+    farmer_level?: string;
+    domestic?: string;
+    export?: string;
+    import?: string;
+  };
+  mitigation_summary: string;
+  quarantine_actions?: string[];
+  distribution_map_url?: string;
+  distribution_map_page_url?: string;
+  references?: Reference[];
+  integrated_sources?: IntegratedSource[];
+  source_databases?: {
+    cabi?: string;
+    eppo?: string;
+    ippc?: string;
+  };
+  confidence_score: number;
+  decision_summary: string;
+  treatment_guide?: TreatmentGuide;
+  lang?: 'id' | 'en';
+}
+
+const renderMitigationList = (text: string, colorClass: string, bgClass: string) => {
+  if (!text) return null;
+  
+  // Split by newline first
+  const rawLines = text.split('\n');
+  const lines: string[] = [];
+  
+  rawLines.forEach(line => {
+    // Split by number pattern (e.g., "1.", "2.") to handle cases where AI doesn't use newlines
+    const parts = line.split(/(?=\b\d+[\.\)]\s)/).map(p => p.trim()).filter(p => p.length > 0);
+    lines.push(...parts);
+  });
+
+  return (
+    <ul className="space-y-3 mt-3">
+      {lines.map((line, idx) => {
+        const cleanLine = line.replace(/^\d+[\.\)]\s*/, '').trim();
+        return (
+          <li key={idx} className="flex items-start gap-2 text-sm text-slate-700">
+            <div className={`w-5 h-5 rounded-full ${bgClass} ${colorClass} flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5`}>
+              {idx + 1}
+            </div>
+            <span className="leading-relaxed">{cleanLine}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+};
+
+export default function App() {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [translating, setTranslating] = useState(false);
+  const [report, setReport] = useState<DecisionReport | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [isCookieError, setIsCookieError] = useState(false);
+  const [feedback, setFeedback] = useState<'up' | 'down' | null>(null);
+  const [feedbackText, setFeedbackText] = useState('');
+  const [showFeedbackForm, setShowFeedbackForm] = useState(false);
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
+  const [loadingStep, setLoadingStep] = useState<string>('');
+
+  const [activeTreatmentStep, setActiveTreatmentStep] = useState(0);
+  const [lang, setLang] = useState<'id' | 'en'>('id');
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isKarantinaTumbuhanOpen, setIsKarantinaTumbuhanOpen] = useState(false);
+  const [view, setView] = useState<'identify' | 'stats' | 'history'>('history');
+  const t = translations[lang];
+
+  // Handle translation when language changes
+  useEffect(() => {
+    const translateReport = async () => {
+      if (!report || report.lang === lang || translating) return;
+
+      setTranslating(true);
+      try {
+        const response = await fetch(`${getApiUrl() || window.location.origin}/api/translate-report`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ report, targetLang: lang }),
+        });
+
+        if (response.ok) {
+          const translatedReport = await response.json();
+          setReport(translatedReport);
+        }
+      } catch (error) {
+        console.error('Translation error:', error);
+      } finally {
+        setTranslating(false);
+      }
+    };
+
+    if (report && report.lang !== lang) {
+      translateReport();
+    }
+  }, [lang, report, translating]);
+
+  // Session priming on mount
+  useEffect(() => {
+    const primeSession = async () => {
+      try {
+        const response = await fetch(`${getApiUrl() || window.location.origin}/api/ping`, { credentials: 'include' });
+        const text = await response.text();
+        if (text.includes('<title>Cookie check</title>')) {
+          console.warn('Initial session priming detected cookie check. User interaction may be required.');
+          setIsCookieError(true);
+        } else {
+          console.log('Session primed successfully');
+        }
+      } catch (e) {
+        console.warn('Initial session priming failed:', e);
+      }
+    };
+    primeSession();
+  }, []);
+
+  const loadingSteps = [
+    'Mengunggah gambar sampel ke server...',
+    'Menganalisis morfologi dan ciri fisik serangga...',
+    'Mengekstrak data taksonomi dari gambar...',
+    'Mengecek status OPTK di Kepkaban 571/2025...',
+    'Mencari data sebaran geografis di EPPO Global Database...',
+    'Mengkonsultasikan referensi teknis di CABI...',
+    'Menghitung tingkat risiko dan dampak ekonomi...',
+    'Menyusun rekomendasi tindakan karantina...',
+    'Membuat laporan keputusan akhir...'
+  ];
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const selectedFile = e.target.files[0];
+      
+      // Check if file exceeds 2MB
+      if (selectedFile.size > 2 * 1024 * 1024) {
+        setErrorMsg('Ukuran gambar terlalu besar. Maksimal ukuran file adalah 2MB.');
+        setFile(null);
+        setPreview(null);
+        setReport(null);
+        return;
+      }
+      
+      setFile(selectedFile);
+      setPreview(URL.createObjectURL(selectedFile));
+      setReport(null);
+      setErrorMsg(null);
+      setFeedback(null);
+      setShowFeedbackForm(false);
+      setFeedbackSubmitted(false);
+      setFeedbackText('');
+    }
+  };
+
+  const resizeImage = (file: File): Promise<Blob> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+          const maxDim = 1024;
+
+          if (width > height) {
+            if (width > maxDim) {
+              height *= maxDim / width;
+              width = maxDim;
+            }
+          } else {
+            if (height > maxDim) {
+              width *= maxDim / height;
+              height = maxDim;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx?.drawImage(img, 0, 0, width, height);
+          canvas.toBlob((blob) => {
+            resolve(blob || file);
+          }, 'image/jpeg', 0.8);
+        };
+        img.src = e.target?.result as string;
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleUpload = async () => {
+    if (!file) return;
+
+    setLoading(true);
+    setErrorMsg(null);
+    setIsCookieError(false);
+    setReport(null);
+    
+    // Cycle through loading steps
+    let stepIdx = 0;
+    setLoadingStep(t.loadingSteps[0]);
+    const stepInterval = setInterval(() => {
+      stepIdx = (stepIdx + 1) % t.loadingSteps.length;
+      setLoadingStep(t.loadingSteps[stepIdx]);
+    }, 3000);
+
+    // Session priming - try to "ping" the server first to establish cookies
+    try {
+      await fetch(`${getApiUrl() || window.location.origin}/api/ping`, { credentials: 'include' });
+    } catch (e) {
+      console.warn('Ping failed, continuing with upload anyway...', e);
+    }
+
+    // Resize image before upload to speed up processing
+    const resizedImage = await resizeImage(file);
+    const formData = new FormData();
+    formData.append('image', resizedImage, 'image.jpg');
+    formData.append('lang', lang);
+
+    // Set a 180-second timeout for the request to allow for API key rotation
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(new Error('Timeout')), 180000);
+
+    try {
+      const response = await fetch(`${getApiUrl() || window.location.origin}/api/detect-insect`, {
+        method: 'POST',
+        body: formData,
+        signal: controller.signal,
+        credentials: 'include'
+      });
+      
+      clearTimeout(timeoutId);
+      
+      const contentType = response.headers.get("content-type");
+        if (contentType && contentType.includes("application/json")) {
+          const data = await response.json();
+          if (!response.ok) {
+            throw new Error(data.error || 'Gagal menganalisis gambar.');
+          }
+          data.lang = lang; // Tag the report with the language it was generated in
+          setReport(data);
+        } else {
+        // If the response is not JSON, it's likely an HTML error page from the server or proxy
+        const text = await response.text();
+        console.error('Non-JSON response received:', text.substring(0, 500));
+        
+        if (text.includes('<title>Cookie check</title>')) {
+          setIsCookieError(true);
+          throw new Error('Sesi koneksi terputus oleh sistem keamanan platform (Cookie Check). Silakan klik tombol "Perbaiki Koneksi" di bawah atau muat ulang halaman.');
+        }
+        
+        throw new Error('Server mengembalikan respon tidak valid. Pastikan API Key sudah benar dan server berjalan.');
+      }
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      console.error('Error uploading image:', error);
+      
+      const isTimeout = error.name === 'AbortError' || 
+                        error.message?.toLowerCase().includes('aborted') || 
+                        error.message?.toLowerCase().includes('timeout');
+      
+      if (isTimeout) {
+        setErrorMsg(t.errorTimeout);
+      } else if (error.message === 'API_QUOTA_EXCEEDED') {
+        setErrorMsg(t.errorQuotaExceeded);
+      } else if (error.message === 'API_QUOTA_EXCEEDED_ZERO') {
+        setErrorMsg(t.errorQuotaZero);
+      } else if (error.message === 'API_UNAVAILABLE') {
+        setErrorMsg(t.errorUnavailable);
+      } else if (error.message === 'Failed to fetch') {
+        setErrorMsg(t.errorNetwork);
+      } else if (error.message?.includes('Cookie check')) {
+        setErrorMsg(t.errorCookie);
+        setIsCookieError(true);
+      } else {
+        setErrorMsg(error.message || t.errorGeneric);
+      }
+    } finally {
+      clearInterval(stepInterval);
+      setLoading(false);
+    }
+  };
+
+  const fixConnection = () => {
+    // Open the ping endpoint in a small popup and close it immediately
+    // This "primes" the browser with the necessary cookies for the platform's proxy
+    const popup = window.open(`${getApiUrl() || window.location.origin}/api/ping`, 'session_fixer', 'width=400,height=400,left=100,top=100');
+    if (popup) {
+      // Show a message to the user
+      setErrorMsg('Membuka jendela perbaikan koneksi... Silakan tunggu sebentar.');
+      
+      const checkPopup = setInterval(() => {
+        if (popup.closed) {
+          clearInterval(checkPopup);
+          setErrorMsg('Koneksi diperbaiki. Silakan coba upload kembali.');
+          setIsCookieError(false);
+          // Automatically try to upload again
+          handleUpload();
+        }
+      }, 500);
+
+      // Auto-close after 3 seconds if it doesn't close itself
+      setTimeout(() => {
+        if (!popup.closed) {
+          popup.close();
+        }
+      }, 3000);
+    } else {
+      alert('Popup diblokir. Silakan izinkan popup untuk situs ini agar kami dapat memperbaiki koneksi Anda secara otomatis.');
+    }
+  };
+
+  const handleFeedbackSubmit = () => {
+    // In a real app, this would send the feedback to the server
+    console.log('Feedback submitted:', { type: feedback, text: feedbackText });
+    setFeedbackSubmitted(true);
+    setShowFeedbackForm(false);
+  };
+
+  const getRiskColor = (risk: string) => {
+    switch (risk?.toUpperCase()) {
+      case 'CRITICAL': return 'text-red-600 bg-red-100 border-red-200';
+      case 'HIGH': return 'text-orange-600 bg-orange-100 border-orange-200';
+      case 'LOW': return 'text-green-600 bg-green-100 border-green-200';
+      default: return 'text-gray-600 bg-gray-100 border-gray-200';
+    }
+  };
+
+  const isImageUrl = (url?: string) => {
+    if (!url) return false;
+    return /\.(jpg|jpeg|png|webp|avif|gif|svg)$/.test(url.toLowerCase()) || url.includes('image') || url.includes('map');
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-900">
+      {/* Header */}
+      <header className="shadow-md relative z-50" style={{ backgroundColor: '#123138' }}>
+        <div className="max-w-5xl mx-auto px-4 py-6">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <button onClick={() => setIsMenuOpen(!isMenuOpen)} className="text-white p-2">
+                {isMenuOpen ? <X /> : <Menu />}
+              </button>
+              <img 
+                src="https://karantinaindonesia.go.id/images/logo_barantin.png" 
+                alt="Logo BARANTIN" 
+                className="h-14 w-auto object-contain"
+                referrerPolicy="no-referrer"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = "https://upload.wikimedia.org/wikipedia/commons/8/8a/Logo_Badan_Karantina_Indonesia.png";
+                }}
+              />
+              <div>
+                <h1 
+                  className="text-2xl tracking-tight" 
+                  style={{ 
+                    color: '#fec558', 
+                    fontFamily: '"Uni Sans Heavy", "Arial Black", sans-serif',
+                    fontWeight: 900
+                  }}
+                >
+                  {t.headerTitle}
+                </h1>
+                <p className="text-sm opacity-90" style={{ color: '#fec558' }}>
+                  {t.headerSubtitle}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Hamburger Menu */}
+        {isMenuOpen && (
+          <div className="absolute top-full left-0 w-full bg-white shadow-xl border-t border-slate-200 p-4">
+            <button onClick={() => { setView('history'); setIsMenuOpen(false); }} className="block w-full text-left p-3 font-bold text-slate-700 hover:bg-slate-100">Sejarah Barantin</button>
+            <button onClick={() => setIsKarantinaTumbuhanOpen(!isKarantinaTumbuhanOpen)} className="flex justify-between items-center w-full text-left p-3 font-bold text-slate-700 hover:bg-slate-100">
+              Karantina Tumbuhan {isKarantinaTumbuhanOpen ? <ChevronDown /> : <ChevronRight />}
+            </button>
+            {isKarantinaTumbuhanOpen && (
+              <div className="pl-6">
+                <button onClick={() => { setView('identify'); setIsMenuOpen(false); }} className="block w-full text-left p-3 text-slate-600 hover:bg-slate-100">Deteksi OPTK</button>
+                <button onClick={() => { setView('stats'); setIsMenuOpen(false); }} className="block w-full text-left p-3 text-slate-600 hover:bg-slate-100">Sebaran OPTK</button>
+              </div>
+            )}
+          </div>
+        )}
+      </header>
+
+      <main className="max-w-5xl mx-auto px-4 py-8">
+        {view === 'history' && <HistoryPage />}
+        {view === 'identify' && (
+          <div className="grid md:grid-cols-12 gap-8">
+            {/* Upload Section */}
+            <div className="md:col-span-5 space-y-6">
+              {errorMsg && (
+                <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl flex items-start gap-3 animate-in fade-in slide-in-from-top-2">
+                  <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <h3 className="font-semibold text-sm">{t.analysisFailed}</h3>
+                    <p className="text-sm mt-1 leading-relaxed">{errorMsg}</p>
+                    <div className="flex gap-2 mt-3">
+                      <button 
+                        onClick={handleUpload}
+                        className="text-xs font-bold uppercase tracking-wider bg-red-100 hover:bg-red-200 text-red-800 px-3 py-1.5 rounded-lg transition-colors"
+                      >
+                        {t.tryAgain}
+                      </button>
+                      {isCookieError && (
+                        <button 
+                          onClick={fixConnection}
+                          className="text-xs font-bold uppercase tracking-wider bg-blue-100 hover:bg-blue-200 text-blue-800 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1"
+                        >
+                          <ShieldCheck className="w-3 h-3" /> {t.fixConnection}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+                <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                  <Upload className="w-5 h-5 text-emerald-600" />
+                  {t.uploadSample}
+                </h2>
+                
+                <div className="border-2 border-dashed border-slate-300 rounded-xl p-8 text-center hover:bg-slate-50 transition-colors relative">
+                  <input 
+                    type="file" 
+                    accept="image/*" 
+                    onChange={handleFileChange}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  />
+                  {preview ? (
+                    <div className="space-y-4">
+                      <img src={preview} alt="Preview" className="max-h-48 mx-auto rounded-lg shadow-sm" />
+                      <p className="text-sm text-slate-500">{t.clickToChange}</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
+                        <Bug className="w-8 h-8" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-slate-700">{t.dragDrop}</p>
+                        <p className="text-sm text-slate-500 mt-1">{t.formatInfo}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  onClick={handleUpload}
+                  disabled={!file || loading}
+                  className={`w-full mt-6 py-3 px-4 rounded-xl font-medium text-white transition-all
+                    ${!file || loading 
+                      ? 'bg-slate-300 cursor-not-allowed' 
+                      : 'bg-emerald-600 hover:bg-emerald-700 shadow-sm hover:shadow-md'
+                    }`}
+                >
+                  {loading ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      {t.analyzingBtn}
+                    </span>
+                  ) : (
+                    t.analyzeBtn
+                  )}
+                </button>
+              </div>
+
+              <div className="bg-blue-50 border border-blue-100 rounded-2xl p-5 text-sm text-blue-800">
+                <h3 className="font-semibold flex items-center gap-2 mb-2">
+                  <Info className="w-4 h-4" />
+                  {t.integratedSystem}
+                </h3>
+                <ul className="space-y-2 ml-6 list-disc opacity-90">
+                  <li>
+                    <a href="https://jdih.karantinaindonesia.go.id/repository/barantin-jdih/common/dokumen/KepDilarangKT.pdf" target="_blank" rel="noreferrer" className="hover:underline flex items-center gap-1">
+                      Kepkaban No. 571 Tahun 2025 <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </li>
+                  <li>
+                    <a href="https://www.cabidigitallibrary.org/" target="_blank" rel="noreferrer" className="hover:underline flex items-center gap-1">
+                      CABI Global Database <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </li>
+                  <li>
+                    <a href="https://gd.eppo.int/" target="_blank" rel="noreferrer" className="hover:underline flex items-center gap-1">
+                      EPPO Global Database <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </li>
+                  <li>
+                    <a href="https://ippc.int" target="_blank" rel="noreferrer" className="hover:underline flex items-center gap-1">
+                      IPPC ISPM Standards <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </li>
+                </ul>
+              </div>
+            </div>
+
+            {/* Result Section */}
+            <div className="md:col-span-7">
+              {(loading || translating) && (
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-12 text-center flex flex-col items-center justify-center min-h-[400px] animate-in fade-in duration-500">
+                  <div className="relative w-24 h-24 mb-8">
+                    <div className="absolute inset-0 border-4 border-emerald-100 rounded-full" />
+                    <div className="absolute inset-0 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <Bug className="w-10 h-10 text-emerald-600 animate-pulse" />
+                    </div>
+                  </div>
+                  <h3 className="text-xl font-bold text-slate-800 mb-2">
+                    {translating ? (lang === 'id' ? 'Menerjemahkan...' : 'Translating...') : t.analyzingTitle}
+                  </h3>
+                  <p className="text-slate-500 max-w-xs mx-auto mb-8">
+                    {translating 
+                      ? (lang === 'id' ? 'AI sedang menerjemahkan laporan teknis ke Bahasa Indonesia.' : 'AI is translating the technical report to English.')
+                      : t.analyzingDesc}
+                  </p>
+                  
+                  <div className="w-full max-w-sm space-y-4">
+                    <div className="flex items-center justify-between text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">
+                      <span>{translating ? (lang === 'id' ? 'Status Terjemahan' : 'Translation Status') : t.processStatus}</span>
+                      <span className="text-emerald-600">{t.active}</span>
+                    </div>
+                    <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                      <div className="h-full bg-emerald-500 animate-loading-fast" />
+                    </div>
+                    <div className="flex items-center gap-3 justify-center text-emerald-700 font-medium bg-emerald-50 py-2 px-4 rounded-lg border border-emerald-100 italic">
+                      <div className="w-2 h-2 bg-emerald-500 rounded-full animate-ping" />
+                      {translating ? (lang === 'id' ? 'Mohon tunggu sebentar' : 'Please wait a moment') : loadingStep}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {report && !loading && !translating && (
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
+                  {/* Report Header */}
+                  <div className="p-6 border-b border-slate-100">
+                    <div className="flex items-start justify-between mb-4">
+                      <div>
+                        <h2 className="text-2xl font-bold text-slate-900 italic">
+                          {report.scientific_name}
+                        </h2>
+                        <p className="text-slate-500 mt-1">{t.confidence}: {report.confidence_score ? (report.confidence_score * 100).toFixed(1) : 'N/A'}%</p>
+                      </div>
+                      <div className={`px-4 py-1.5 rounded-full border font-bold text-sm tracking-wide ${getRiskColor(report.risk_level)}`}>
+                        {report.risk_level} {t.risk}
+                      </div>
+                    </div>
+                    
+                    <div className="bg-slate-50 rounded-xl p-4 border border-slate-200">
+                      <p className="font-medium text-slate-800 flex items-start gap-2">
+                        <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                        {report.decision_summary}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Report Body */}
+                  <div className="p-6 space-y-8">
+                    {/* Taxonomy Section */}
+                    <section id="taxonomy-section">
+                      <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                        <Bug className="w-4 h-4" /> {t.taxonomy}
+                      </h3>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        {Object.entries(report.taxonomy).map(([key, value]) => (
+                          <div key={key} className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                            <p className="text-[10px] text-slate-400 uppercase font-bold">{key.replace('_', ' ')}</p>
+                            <p className="text-sm font-semibold text-slate-700 truncate">{value || '-'}</p>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-sm text-slate-600 mt-3 leading-relaxed italic">
+                        {report.taxonomy_explanation}
+                      </p>
+                    </section>
+
+                    {/* Status & Regulation */}
+                    <div id="status-regulation-section" className="grid sm:grid-cols-2 gap-6">
+                      <section className="bg-emerald-50/50 p-5 rounded-2xl border border-emerald-100">
+                        <h3 className="text-sm font-bold text-emerald-800 uppercase tracking-widest mb-3 flex items-center gap-2">
+                          <ShieldCheck className="w-4 h-4" /> {t.quarantineStatus}
+                        </h3>
+                        <div className="text-2xl font-black text-emerald-700 mb-2">{report.quarantine_status}</div>
+                        <p className="text-sm text-emerald-800/80 leading-relaxed font-medium">
+                          {report.regulatory_status}: {report.regulation_description}
+                        </p>
+                        {report.quarantine_actions && report.quarantine_actions.length > 0 && (
+                          <div className="mt-4 pt-4 border-t border-emerald-200/50">
+                            <h4 className="text-[10px] font-bold text-emerald-600 uppercase mb-2 tracking-wider">{t.quarantineActions}</h4>
+                            <ul className="space-y-1.5">
+                              {report.quarantine_actions.map((action, idx) => (
+                                <li key={idx} className="text-xs text-emerald-800 flex items-start gap-2">
+                                  <div className="w-1 h-1 rounded-full bg-emerald-500 mt-1.5 shrink-0" />
+                                  {action}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </section>
+
+                      <section className="bg-slate-50 p-5 rounded-2xl border border-slate-200">
+                        <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                          <AlertTriangle className="w-4 h-4" /> {t.riskAnalysis}
+                        </h3>
+                        <div className="space-y-2">
+                          <div className="flex justify-between text-xs">
+                            <span className="text-slate-500">{t.potentialDamage}</span>
+                            <span className="font-bold text-slate-700">{report.risk_details.potential_damage}</span>
+                          </div>
+                          <div className="flex justify-between text-xs">
+                            <span className="text-slate-500">{t.spreadRate}</span>
+                            <span className="font-bold text-slate-700">{report.risk_details.spread_rate}</span>
+                          </div>
+                          <div className="flex justify-between text-xs">
+                            <span className="text-slate-500">{t.economicImpact}</span>
+                            <span className="font-bold text-slate-700">{report.risk_details.economic_impact}</span>
+                          </div>
+                        </div>
+                      </section>
+                    </div>
+
+                    {/* Mitigation Section */}
+                    <section id="mitigation-section">
+                      <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                        <ShieldAlert className="w-4 h-4" /> {t.mitigationTitle}
+                      </h3>
+                      <div className="grid sm:grid-cols-2 gap-4">
+                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                          <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">{t.farmerLevel}</h4>
+                          {renderMitigationList(report.mitigation.farmer_level || '', 'text-emerald-600', 'bg-emerald-100')}
+                        </div>
+                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                          <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">{t.domesticMitigation}</h4>
+                          {renderMitigationList(report.mitigation.domestic || '', 'text-blue-600', 'bg-blue-100')}
+                        </div>
+                      </div>
+                    </section>
+
+                    {/* Treatment Guide */}
+                    {report.treatment_guide && (
+                      <section id="treatment-guide-section" className="bg-slate-900 text-white rounded-2xl p-6 overflow-hidden relative">
+                        <div className="absolute top-0 right-0 p-8 opacity-10">
+                          <RefreshCw size={120} className="animate-spin-slow" />
+                        </div>
+                        
+                        <div className="relative z-10">
+                          <div className="flex items-center gap-3 mb-6">
+                            <div className="p-2 bg-emerald-500 rounded-lg">
+                              <RefreshCw size={20} className="text-white" />
+                            </div>
+                            <div>
+                              <h3 className="text-lg font-bold">{t.treatmentGuide}</h3>
+                              <p className="text-xs text-slate-400">{report.treatment_guide.media_type} • {report.treatment_guide.treatment_method}</p>
+                            </div>
+                          </div>
+
+                          <div className="flex gap-2 mb-6 overflow-x-auto pb-2 scrollbar-hide">
+                            {report.treatment_guide.steps.map((step, idx) => (
+                              <button
+                                key={idx}
+                                onClick={() => setActiveTreatmentStep(idx)}
+                                className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-all
+                                  ${activeTreatmentStep === idx 
+                                    ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/30' 
+                                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+                              >
+                                {t.step} {step.step_number}
+                              </button>
+                            ))}
+                          </div>
+
+                          <div className="bg-slate-800/50 rounded-xl p-5 border border-slate-700 animate-in fade-in slide-in-from-right-4 duration-300">
+                            <h4 className="font-bold text-emerald-400 mb-2">{report.treatment_guide.steps[activeTreatmentStep].title}</h4>
+                            <p className="text-sm text-slate-300 leading-relaxed mb-4">
+                              {report.treatment_guide.steps[activeTreatmentStep].description}
+                            </p>
+                            {report.treatment_guide.steps[activeTreatmentStep].technical_details && (
+                              <div className="bg-slate-900/50 p-3 rounded-lg border border-slate-700/50 text-xs font-mono text-emerald-300">
+                                <span className="text-slate-500 mr-2">PARAMS:</span>
+                                {report.treatment_guide.steps[activeTreatmentStep].technical_details}
+                              </div>
+                            )}
+                            {report.treatment_guide.steps[activeTreatmentStep].video_url && (
+                              <a 
+                                href={report.treatment_guide.steps[activeTreatmentStep].video_url} 
+                                target="_blank" 
+                                rel="noreferrer"
+                                className="mt-4 inline-flex items-center gap-2 text-xs font-bold text-emerald-400 hover:text-emerald-300 transition-colors"
+                              >
+                                <ExternalLink size={14} /> {t.watchTutorial}
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      </section>
+                    )}
+
+                    {/* Distribution Map */}
+                    {(report.distribution_map_url || report.distribution_map_page_url) && (
+                      <section id="distribution-map-section">
+                        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                          <Globe className="w-4 h-4" /> {t.distributionMap}
+                        </h3>
+                        
+                        {isImageUrl(report.distribution_map_url) ? (
+                          <div className="rounded-2xl overflow-hidden border border-slate-200 shadow-sm bg-slate-100 aspect-video relative group">
+                            <img 
+                              src={report.distribution_map_url} 
+                              alt="Distribution Map" 
+                              className="w-full h-full object-cover"
+                              referrerPolicy="no-referrer"
+                            />
+                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                              <a 
+                                href={report.distribution_map_url} 
+                                target="_blank" 
+                                rel="noreferrer"
+                                className="bg-white text-slate-900 px-4 py-2 rounded-full font-bold text-sm flex items-center gap-2"
+                              >
+                                <ExternalLink size={16} /> {t.viewFullMap}
+                              </a>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-8 text-center">
+                            <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                              <Globe className="w-8 h-8" />
+                            </div>
+                            <h4 className="font-bold text-slate-800 mb-2">{t.distributionMap}</h4>
+                            <p className="text-sm text-slate-500 mb-6 max-w-xs mx-auto">
+                              {lang === 'id' 
+                                ? 'Peta sebaran interaktif tersedia di database resmi EPPO.' 
+                                : 'Interactive distribution map is available on the official EPPO database.'}
+                            </p>
+                            <a 
+                              href={report.distribution_map_page_url || report.distribution_map_url} 
+                              target="_blank" 
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-xl font-bold transition-all shadow-sm hover:shadow-md"
+                            >
+                              <ExternalLink size={18} /> {t.interactiveMap}
+                            </a>
+                          </div>
+                        )}
+                      </section>
+                    )}
+
+                    {/* References */}
+                    <section id="references-section" className="pt-4 border-t border-slate-100">
+                      <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">{t.referencesTitle}</h3>
+                      <div className="grid gap-2">
+                        {report.references?.map((ref, idx) => (
+                          <a 
+                            key={idx} 
+                            href={ref.url} 
+                            target="_blank" 
+                            rel="noreferrer"
+                            className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100 hover:bg-slate-100 transition-colors group"
+                          >
+                            <div className="flex items-center gap-3">
+                              <BookOpen size={16} className="text-slate-400" />
+                              <span className="text-sm text-slate-600 font-medium group-hover:text-slate-900">{ref.title}</span>
+                            </div>
+                            <ExternalLink size={14} className="text-slate-300 group-hover:text-slate-500" />
+                          </a>
+                        ))}
+                      </div>
+                    </section>
+                  </div>
+
+                  {/* Feedback Section */}
+                  <div className="p-6 bg-slate-50 border-t border-slate-100">
+                    {!feedbackSubmitted ? (
+                      <div className="space-y-4">
+                        <p className="text-sm font-bold text-slate-500 text-center">{t.feedbackQuestion}</p>
+                        <div className="flex justify-center gap-4">
+                          <button 
+                            onClick={() => { setFeedback('up'); setShowFeedbackForm(true); }}
+                            className={`p-3 rounded-full transition-all ${feedback === 'up' ? 'bg-emerald-500 text-white shadow-lg' : 'bg-white text-slate-400 hover:text-emerald-500 border border-slate-200'}`}
+                          >
+                            <CheckCircle size={24} />
+                          </button>
+                          <button 
+                            onClick={() => { setFeedback('down'); setShowFeedbackForm(true); }}
+                            className={`p-3 rounded-full transition-all ${feedback === 'down' ? 'bg-red-500 text-white shadow-lg' : 'bg-white text-slate-400 hover:text-red-500 border border-slate-200'}`}
+                          >
+                            <AlertTriangle size={24} />
+                          </button>
+                        </div>
+                        
+                        {showFeedbackForm && (
+                          <div className="space-y-3 animate-in fade-in slide-in-from-top-2">
+                            <textarea 
+                              value={feedbackText}
+                              onChange={(e) => setFeedbackText(e.target.value)}
+                              placeholder={t.feedbackPlaceholder}
+                              className="w-full p-3 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-500 outline-none min-h-[80px]"
+                            />
+                            <button 
+                              onClick={handleFeedbackSubmit}
+                              className="w-full py-2 bg-slate-800 text-white rounded-lg text-sm font-bold hover:bg-slate-700 transition-colors"
+                            >
+                              {t.submitFeedback}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="text-center py-4 animate-in zoom-in-95">
+                        <div className="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-3">
+                          <CheckCircle size={24} />
+                        </div>
+                        <p className="font-bold text-slate-800">{t.feedbackThanks}</p>
+                        <p className="text-sm text-slate-500 mt-1">{t.feedbackImprove}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+              {!loading && !report && (
+                <div className="h-full flex flex-col items-center justify-center text-center p-12 border-2 border-dashed border-slate-200 rounded-2xl bg-slate-50/50">
+                  <ShieldAlert className="w-16 h-16 text-slate-300 mb-4" />
+                  <h3 className="text-lg font-medium text-slate-600">Belum ada hasil analisis</h3>
+                  <p className="text-slate-400 mt-2 max-w-sm">
+                    Upload gambar sampel serangga untuk memulai analisis menggunakan AI Vision dan DSS Rule Engine.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        {view === 'stats' && <StatisticsDashboard t={t} />}
+      </main>
+    </div>
+  );
+}

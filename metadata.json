@@ -1,0 +1,37 @@
+[
+  {
+    "timestamp": "2026-03-01T10:00:00.000Z",
+    "scientific_name": "Bactrocera dorsalis",
+    "quarantine_status": "OPTK A2",
+    "risk_level": "HIGH",
+    "region": "Jakarta"
+  },
+  {
+    "timestamp": "2026-03-01T11:30:00.000Z",
+    "scientific_name": "Spodoptera frugiperda",
+    "quarantine_status": "OPTK A2",
+    "risk_level": "HIGH",
+    "region": "Surabaya"
+  },
+  {
+    "timestamp": "2026-03-01T14:20:00.000Z",
+    "scientific_name": "Trogoderma granarium",
+    "quarantine_status": "OPTK A1",
+    "risk_level": "CRITICAL",
+    "region": "Medan"
+  },
+  {
+    "timestamp": "2026-03-02T09:15:00.000Z",
+    "scientific_name": "Bactrocera dorsalis",
+    "quarantine_status": "OPTK A2",
+    "risk_level": "HIGH",
+    "region": "Jakarta"
+  },
+  {
+    "timestamp": "2026-03-02T10:45:00.000Z",
+    "scientific_name": "Ceratitis capitata",
+    "quarantine_status": "OPTK A1",
+    "risk_level": "CRITICAL",
+    "region": "Bali"
+  }
+]

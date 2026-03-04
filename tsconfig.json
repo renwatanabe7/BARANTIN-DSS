@@ -1,0 +1,44 @@
+# Integrasi Android Studio (Insect Detector)
+
+Aplikasi ini telah dikonfigurasi menggunakan **Capacitor** untuk dapat dijalankan sebagai aplikasi Android native.
+
+## Struktur Proyek
+
+- `android/`: Folder ini adalah proyek Android Studio yang lengkap. Anda dapat membukanya langsung di Android Studio.
+- `src/App.tsx`: Kode sumber aplikasi React. Logika URL API telah disesuaikan agar otomatis menggunakan server backend produksi saat dijalankan di perangkat Android.
+
+## Cara Menjalankan di Android Studio
+
+1.  **Buka Android Studio.**
+2.  Pilih **Open** dan arahkan ke folder `android` di dalam direktori proyek ini.
+3.  Tunggu hingga Gradle selesai melakukan sinkronisasi (ini mungkin memakan waktu beberapa menit saat pertama kali dibuka).
+4.  Hubungkan perangkat Android Anda atau jalankan Emulator.
+5.  Klik tombol **Run** (ikon segitiga hijau) di toolbar Android Studio.
+
+## Mengubah Kode Sumber
+
+Jika Anda melakukan perubahan pada kode React (`src/App.tsx`, dll), Anda perlu memperbarui proyek Android dengan langkah berikut:
+
+1.  Jalankan build ulang aplikasi web:
+    ```bash
+    npm run build
+    ```
+2.  Sinkronkan perubahan ke folder Android:
+    ```bash
+    npx cap sync android
+    ```
+3.  Jalankan ulang aplikasi dari Android Studio.
+
+## Konfigurasi API
+
+Aplikasi dikonfigurasi untuk secara otomatis mendeteksi platform:
+- **Web/Development**: Menggunakan relative path (proxy ke localhost).
+- **Android Native**: Menggunakan URL backend produksi: `https://ais-pre-oa4vo6s4cqlc6deoezomlg-359100989091.asia-east1.run.app`.
+
+Jika Anda ingin mengubah URL backend, silakan edit fungsi `getApiUrl` di `src/App.tsx`.
+
+## Persyaratan Sistem
+
+- Android Studio Giraffe atau lebih baru.
+- JDK 17 atau lebih baru.
+- Android SDK Platform 33 atau lebih baru.
